@@ -10,6 +10,9 @@
 #include "regs.hpp"
 #include "shader_info.hpp"
 #include "texture.hpp"
+#ifdef __EMSCRIPTEN__
+#include "../webgpu/gpu.hpp"
+#endif
 
 #include <tracy/Tracy.hpp>
 
@@ -451,6 +454,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   } else if (prim == GX_POINTS) {
     instanceCount = vtxCount;
   }
+#ifdef __EMSCRIPTEN__
+  const uint32_t immOffset = webgpu::g_useImmediates ? 0 : gfx::push_uniform(immediates).offset;
+#endif
   cache.lastDrawFmt = fmt;
   gfx::push_draw_command(DrawData{
       .pipeline = cache.pipelineRef,
@@ -463,6 +469,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       .instanceCount = instanceCount,
       .bindGroups = cache.bindGroups,
       .dstAlpha = state.dstAlpha,
+#ifdef __EMSCRIPTEN__
+      .immOffset = immOffset,
+#endif
   });
 }
 

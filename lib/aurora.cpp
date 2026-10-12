@@ -380,7 +380,13 @@ void end_frame() noexcept {
       {
         window::SurfaceLock surfaceLock;
         if (window::is_presentable()) {
+#ifdef __EMSCRIPTEN__
+          // The page draws the canvas' current texture; see window::emscripten_present_bitmap.
+          window::emscripten_present_bitmap();
+          status = wgpu::Status::Success;
+#else
           status = g_surface.Present();
+#endif
         }
       }
       if (status) {

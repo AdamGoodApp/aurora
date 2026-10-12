@@ -15,6 +15,10 @@ struct DrawData {
   uint32_t instanceCount;
   GXBindGroups bindGroups;
   uint32_t dstAlpha;
+#ifdef __EMSCRIPTEN__
+  // Uniform-stream offset of immediateData when !webgpu::g_useImmediates.
+  uint32_t immOffset;
+#endif
 };
 
 constexpr uint32_t GXPipelineConfigVersion = 13;

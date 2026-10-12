@@ -24,7 +24,13 @@ uint32_t sDlWritePos = 0;
 
 namespace {
 constexpr Module Log{"aurora::gx::fifo"};
+#ifdef __EMSCRIPTEN__
+// Browser build: WebGPU objects are confined to the game worker, so commands are processed on the calling
+// thread at the same publish points the worker thread would use.
+constexpr auto kProcessingMode = ProcessingMode::Inline;
+#else
 constexpr auto kProcessingMode = ProcessingMode::Thread;
+#endif
 constexpr uint32_t kDrawBatchSize = 1;
 
 bool sFrameActive = false;

@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <dolphin/os.h>
 #include <nod.h>
+#ifdef __EMSCRIPTEN__
+#include <nod_gcm.h>
+#endif
 #include <SDL3/SDL_iostream.h>
 #include <tracy/Tracy.hpp>
 
@@ -123,6 +126,7 @@ bool isAligned(const void* addr, uintptr_t align) {
   return (reinterpret_cast<uintptr_t>(addr) & (align - 1)) == 0;
 }
 
+#ifndef __EMSCRIPTEN__
 int64_t sdlStreamReadAt(void* userData, uint64_t offset, void* out, size_t len) {
   auto* io = static_cast<SDL_IOStream*>(userData);
   if (io == nullptr || out == nullptr ||
@@ -163,6 +167,7 @@ void sdlStreamClose(void* userData) {
   }
   SDL_CloseIO(io);
 }
+#endif
 
 bool nameEqualsIgnoreCase(const std::string& lhs, const char* rhs, size_t rhsLen) {
   return aurora::dvd::impl::nameEqualsIgnoreCase(lhs, std::string_view(rhs, rhsLen));
@@ -655,6 +660,14 @@ bool aurora_dvd_open(const char* disc_path) {
   s_worker.stop();
   clearState();
 
+#ifdef __EMSCRIPTEN__
+  // Reads go through the page's disc server worker, which any thread may call (see nod_gcm.cpp). The DVD
+  // worker thread runs exactly as on native, so completion callbacks stay asynchronous to the requester.
+  const NodDiscStream stream = *nod_gcm_emscripten_stream();
+  const NodDiscOptions options{
+      .preloader_threads = 0,
+  };
+#else
   SDL_IOStream* io = SDL_IOFromFile(disc_path, "rb");
   if (io == nullptr) {
     return false;
@@ -669,6 +682,7 @@ bool aurora_dvd_open(const char* disc_path) {
   const NodDiscOptions options{
       .preloader_threads = 1,
   };
+#endif
 
   NodHandle* discHandle;
   NodResult result = nod_disc_open_stream(&stream, &options, &discHandle);

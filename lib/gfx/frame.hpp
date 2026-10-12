@@ -8,11 +8,23 @@
 namespace aurora::gfx::detail {
 
 inline constexpr size_t FrameSlotCount = 2;
+#ifdef __EMSCRIPTEN__
+// Browser build: buffer mapping completes only when the worker yields to its event loop, which the blocking
+// game loop never does. Frames are recorded into CPU memory and uploaded with Queue::WriteBuffer into the
+// GPU staging buffer right before the existing in-encoder copies. The render worker runs inline, so a single
+// staging buffer is released at the end of every frame.
+inline constexpr size_t StagingBufferCount = 1;
+#else
 inline constexpr size_t StagingBufferCount = FrameSlotCount + 3;
+#endif
 inline constexpr uint64_t StagingBufferSize = UniformBufferSize + VertexBufferSize + IndexBufferSize +
                                               StorageBufferSize + (UseTextureBuffer ? TextureUploadSize : 0);
 
 const wgpu::Buffer& staging_buffer(size_t slot);
+#ifdef __EMSCRIPTEN__
+// CPU mirror of staging_buffer(slot); the recording writes here instead of a mapped range.
+uint8_t* staging_cpu(size_t slot);
+#endif
 
 struct RegisteredDrawType {
   DrawCallback draw = nullptr;

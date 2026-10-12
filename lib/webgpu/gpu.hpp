@@ -56,6 +56,9 @@ extern bool g_hasCoreFeatures;
 extern bool g_bcTexturesSupported;
 extern bool g_astcTexturesSupported;
 extern bool g_textureComponentSwizzleSupported;
+// True when the device supports immediates (var<immediate>/SetImmediates) of DrawImmediateData's size;
+// otherwise GX draws pass that data through a dynamic-offset uniform binding. Always true on Dawn native.
+extern bool g_useImmediates;
 
 bool initialize(AuroraBackend backend, bool allowCpu);
 void shutdown();

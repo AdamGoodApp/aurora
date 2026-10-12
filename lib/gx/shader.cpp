@@ -1628,6 +1628,14 @@ std::string build_shader_source(const ShaderConfig& config) noexcept {
     fragmentFn += "\n    prev = vec4f(in.nrm, prev.a);";
   }
 
+#ifdef __EMSCRIPTEN__
+  // Without device immediates, `imm` is a second dynamic-offset uniform binding (see gx::initialize).
+  const std::string_view immediateDecl = webgpu::g_useImmediates
+                                             ? std::string_view{"var<immediate> imm: Immediate;"}
+                                             : std::string_view{"@group(1) @binding(1)\nvar<uniform> imm: Immediate;"};
+#else
+  constexpr std::string_view immediateDecl = "var<immediate> imm: Immediate;";
+#endif
   const auto shaderSource = fmt::format(R"""(
 fn bswap32(v: u32, le: bool) -> u32 {{
   if (le) {{
@@ -1966,7 +1974,7 @@ struct Immediate {{
     array_start1: vec4u,
     array_start2: vec4u,
 }};
-var<immediate> imm: Immediate;
+{9}
 
 struct Uniform {{
     render_viewport_size: vec2f,
@@ -1997,7 +2005,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {{{6}{5}
 }}
 )""",
                                         uniBufAttrs, texBindings, vtxOutAttrs, vtxInAttrs, vtxXfrAttrs, fragmentFn,
-                                        fragmentFnPre, vtxXfrAttrsPre, uniformPre);
+                                        fragmentFnPre, vtxXfrAttrsPre, uniformPre, immediateDecl);
   if (EnableDebugPrints) {
     Log.info("Generated shader (hash {:x}): {}", hash, shaderSource);
   }

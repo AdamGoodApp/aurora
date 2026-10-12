@@ -324,6 +324,15 @@ constexpr uint64_t TextureUploadStagingOffset = StorageStagingOffset + StorageBu
 
 constexpr uint32_t align_down_copy_offset(uint32_t value) noexcept { return value & ~3u; }
 
+#ifdef __EMSCRIPTEN__
+// Browser build (see frame.hpp): move a recorded CPU staging range into the GPU staging buffer. Queue writes
+// execute before the command buffer that holds the copies below, and every staging range is written once per
+// frame, so the copies observe exactly the bytes they would have read from a mapped staging buffer.
+void upload_staging(size_t slot, uint64_t offset, uint64_t size) {
+  g_queue.WriteBuffer(staging_buffer(slot), offset, staging_cpu(slot) + offset, size);
+}
+#endif
+
 void copy_staging_buffer_range(wgpu::CommandEncoder& cmd, const FramePacket& frame, uint32_t& copied,
                                uint32_t highWater, uint64_t stagingOffset, const wgpu::Buffer& dst) {
   if (highWater <= copied) {
@@ -331,6 +340,9 @@ void copy_staging_buffer_range(wgpu::CommandEncoder& cmd, const FramePacket& fra
   }
   const uint32_t copyStart = align_down_copy_offset(copied);
   const uint32_t copyEnd = AURORA_ALIGN(highWater, 4);
+#ifdef __EMSCRIPTEN__
+  upload_staging(frame.stagingBuffer, stagingOffset + copyStart, copyEnd - copyStart);
+#endif
   cmd.CopyBufferToBuffer(staging_buffer(frame.stagingBuffer), stagingOffset + copyStart, dst, copyStart,
                          copyEnd - copyStart);
   copied = highWater;
@@ -363,6 +375,13 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
                             res.storageBuffer);
 
   if constexpr (UseTextureBuffer) {
+#ifdef __EMSCRIPTEN__
+    if (highWater.textureUpload > frame.copied.textureUpload) {
+      const uint32_t uploadStart = align_down_copy_offset(frame.copied.textureUpload);
+      const uint32_t uploadEnd = AURORA_ALIGN(highWater.textureUpload, 4);
+      upload_staging(frame.stagingBuffer, TextureUploadStagingOffset + uploadStart, uploadEnd - uploadStart);
+    }
+#endif
     for (size_t i = frame.copied.textureUploadCount; i < op.textureUploads.size(); ++i) {
       const auto& item = *op.textureUploads[i];
       const wgpu::TexelCopyBufferInfo buf{

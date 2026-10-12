@@ -30,6 +30,9 @@ using webgpu::g_graphicsConfig;
 
 GXState g_gxState{};
 wgpu::BindGroup g_emptyTextureBindGroup;
+#ifdef __EMSCRIPTEN__
+wgpu::BindGroup g_immUniformBindGroup;
+#endif
 
 namespace {
 wgpu::Sampler sEmptySampler;
@@ -562,6 +565,52 @@ void initialize() noexcept {
     };
     g_emptyTextureBindGroup = g_device.CreateBindGroup(&desc);
   }
+#ifdef __EMSCRIPTEN__
+  if (!webgpu::g_useImmediates) {
+    // Immediates fallback: DrawImmediateData is pushed into the frame's uniform stream per draw and bound as a
+    // second dynamic-offset uniform (WGSL `@group(1) @binding(1) var<uniform> imm`).
+    const auto& res = gfx::detail::resources();
+    const std::array layoutEntries{
+        wgpu::BindGroupLayoutEntry{
+            .binding = 0,
+            .visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment,
+            .buffer = {.type = wgpu::BufferBindingType::Uniform, .hasDynamicOffset = true},
+        },
+        wgpu::BindGroupLayoutEntry{
+            .binding = 1,
+            .visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment,
+            .buffer = {.type = wgpu::BufferBindingType::Uniform,
+                       .hasDynamicOffset = true,
+                       .minBindingSize = sizeof(DrawImmediateData)},
+        },
+    };
+    const wgpu::BindGroupLayoutDescriptor layoutDesc{
+        .label = "GX Uniform+Immediate Bind Group Layout",
+        .entryCount = layoutEntries.size(),
+        .entries = layoutEntries.data(),
+    };
+    const auto immLayout = g_device.CreateBindGroupLayout(&layoutDesc);
+    const std::array entries{
+        wgpu::BindGroupEntry{.binding = 0, .buffer = res.uniformBuffer, .size = MaxUniformSize},
+        wgpu::BindGroupEntry{.binding = 1, .buffer = res.uniformBuffer, .size = sizeof(DrawImmediateData)},
+    };
+    const wgpu::BindGroupDescriptor bindGroupDesc{
+        .label = "GX Uniform+Immediate Bind Group",
+        .layout = immLayout,
+        .entryCount = entries.size(),
+        .entries = entries.data(),
+    };
+    g_immUniformBindGroup = g_device.CreateBindGroup(&bindGroupDesc);
+    const std::array layouts{res.staticBindGroupLayout, immLayout, sTextureBindGroupLayout};
+    const wgpu::PipelineLayoutDescriptor desc{
+        .label = "GX Pipeline Layout (uniform immediates)",
+        .bindGroupLayoutCount = layouts.size(),
+        .bindGroupLayouts = layouts.data(),
+    };
+    sPipelineLayout = g_device.CreatePipelineLayout(&desc);
+    return;
+  }
+#endif
   {
     const std::array layouts{
         gfx::detail::resources().staticBindGroupLayout,

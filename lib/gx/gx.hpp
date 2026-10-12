@@ -88,6 +88,10 @@ static_assert(std::has_unique_object_representations_v<DrawImmediateData>);
 static_assert(sizeof(DrawImmediateData) == 64);
 
 extern wgpu::BindGroup g_emptyTextureBindGroup;
+#ifdef __EMSCRIPTEN__
+// Uniform-buffer stand-in for immediates when !webgpu::g_useImmediates (bound at group 1, two dynamic offsets).
+extern wgpu::BindGroup g_immUniformBindGroup;
+#endif
 
 template <typename Arg, Arg Default>
 struct TevPass {

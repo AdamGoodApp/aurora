@@ -51,4 +51,9 @@ void request_frame_buffer_resize();
 void set_frame_buffer_scale(float scale);
 void set_frame_buffer_aspect_fit(bool fit);
 void set_background_input(bool value);
+#ifdef __EMSCRIPTEN__
+// Hands the canvas' current frame to the page (OffscreenCanvas.transferToImageBitmap + postMessage).
+// Replaces wgpu::Surface::Present, which emdawnwebgpu cannot implement without yielding to the event loop.
+void emscripten_present_bitmap();
+#endif
 }; // namespace aurora::window

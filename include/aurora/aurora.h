@@ -143,6 +143,13 @@ AuroraBackend aurora_get_backend();
 const AuroraBackend* aurora_get_available_backends(size_t* count);
 float aurora_get_timescale();
 
+#ifdef __EMSCRIPTEN__
+/** Browser build: pauses rendering (begin_frame returns false) while the page is hidden. */
+void aurora_emscripten_set_paused(bool paused);
+/** Browser build: the next aurora_update() returns AURORA_EXIT. */
+void aurora_emscripten_request_exit(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

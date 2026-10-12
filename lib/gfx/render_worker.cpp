@@ -266,7 +266,16 @@ void synchronize() {
   sync->cv.wait(lock, [&] { return sync->complete; });
 }
 
-bool is_worker_thread() noexcept { return g_workerThreadId == std::this_thread::get_id(); }
+bool is_worker_thread() noexcept {
+#ifdef __EMSCRIPTEN__
+  // Browser build: the worker thread is never started and enqueued work runs inline on the caller, which
+  // therefore owns the queue/encoder exactly as the render worker would.
+  if (!g_running.load(std::memory_order_acquire)) {
+    return true;
+  }
+#endif
+  return g_workerThreadId == std::this_thread::get_id();
+}
 
 bool is_idle() noexcept { return g_pendingItems.load(std::memory_order_acquire) == 0; }
 

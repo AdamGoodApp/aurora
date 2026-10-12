@@ -3,7 +3,8 @@ include(FetchContent)
 # Don't build tests for third party dependencies
 set(BUILD_TESTING OFF CACHE INTERNAL "Build tests")
 set(SKIP_INSTALL_ALL ON)
-if (NOT DEFINED BUILD_SHARED_LIBS)
+# Emscripten links everything into one wasm module; dependencies must be static there.
+if (NOT DEFINED BUILD_SHARED_LIBS AND NOT EMSCRIPTEN)
   set(_USE_SHARED ON)
 else ()
   set(_USE_SHARED OFF)
@@ -124,6 +125,11 @@ if (AURORA_ENABLE_GX)
       # zlib-ng's NEON LD4 probe passes GNU-style -march flags that clang-cl rejects
       set(NEON_HAS_LD4 1 CACHE INTERNAL "")
     endif ()
+    if (EMSCRIPTEN)
+      # wasm32 has no zlib-ng SIMD paths or CPU feature detection.
+      set(WITH_OPTIM OFF CACHE BOOL "Build with optimisation" FORCE)
+      set(WITH_RUNTIME_CPU_DETECTION OFF CACHE BOOL "Build with runtime CPU detection" FORCE)
+    endif ()
     FetchContent_Declare(
       ZLIB
       URL https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.3.tar.gz
@@ -133,7 +139,11 @@ if (AURORA_ENABLE_GX)
       EXCLUDE_FROM_ALL
     )
     FetchContent_MakeAvailable(ZLIB)
-    add_library(ZLIB::ZLIB ALIAS zlib-ng)
+    if (EMSCRIPTEN)
+      add_library(ZLIB::ZLIB ALIAS zlib-ng-static)
+    else ()
+      add_library(ZLIB::ZLIB ALIAS zlib-ng)
+    endif ()
     # libpng calls find_package(ZLIB) even when zlib was already provided by FetchContent.
     file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/ZLIBConfig.cmake"
       "set(ZLIB_FOUND TRUE)\n"
@@ -195,10 +205,16 @@ if (AURORA_ENABLE_GX)
 
   if (NOT TARGET imgui)
     message(STATUS "aurora: Fetching imgui")
+    set(_aurora_imgui_patch)
+    if (EMSCRIPTEN)
+      set(_aurora_imgui_patch PATCH_COMMAND ${CMAKE_COMMAND} -DIMGUI_SOURCE_DIR=<SOURCE_DIR>
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/patches/apply-imgui-emdawnwebgpu.cmake")
+    endif ()
     FetchContent_Declare(imgui
       URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz
       URL_HASH SHA256=466fdef9b18de15f0bb6e288e3d00ffa3d82200ec458ce5e4f724a161d9528a5
       DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+      ${_aurora_imgui_patch}
       EXCLUDE_FROM_ALL
     )
     FetchContent_MakeAvailable(imgui)
@@ -213,11 +229,16 @@ if (AURORA_ENABLE_GX)
     )
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR})
 
-    add_library(imgui_backends STATIC
-      ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-      ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
-      ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
-    )
+    if (EMSCRIPTEN)
+      # Browser build: no SDL window/renderer; ImGui draws through WebGPU only (lib/imgui.cpp).
+      add_library(imgui_backends STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp)
+    else ()
+      add_library(imgui_backends STATIC
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
+      )
+    endif ()
     target_compile_definitions(imgui_backends PRIVATE IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
     target_link_libraries(imgui_backends PRIVATE imgui ${AURORA_SDL3_TARGET} dawn::webgpu_dawn)
     target_link_libraries(imgui PUBLIC imgui_backends)
@@ -236,6 +257,10 @@ if (AURORA_ENABLE_GX)
     target_compile_definitions(imgui PUBLIC IMGUI_USER_CONFIG="aurora/imgui_config.h")
     target_sources(imgui PRIVATE ${PROJECT_SOURCE_DIR}/lib/imgui_config.cpp)
     target_link_libraries(imgui PRIVATE ${AURORA_SDL3_TARGET})
+    if (EMSCRIPTEN)
+      # No processes in a browser worker (ImGui's open-in-shell uses fork/execvp).
+      target_compile_definitions(imgui PRIVATE IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS)
+    endif ()
   endif ()
 
   aurora_find_package_global(SQLite3)
@@ -257,6 +282,10 @@ if (AURORA_ENABLE_GX)
 
     add_library(sqlite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
     target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
+    if (EMSCRIPTEN)
+      # No dlopen in the browser build.
+      target_compile_definitions(sqlite3 PRIVATE SQLITE_OMIT_LOAD_EXTENSION)
+    endif ()
   endif ()
 
   if (AURORA_CACHE_USE_ZSTD)

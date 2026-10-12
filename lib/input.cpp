@@ -450,10 +450,15 @@ void persist_controller_for_player(uint32_t player, const GameController* contro
 }
 
 void initialize() noexcept {
+#ifdef __EMSCRIPTEN__
+  // Browser build: the game worker has no window/navigator gamepads; the page forwards keyboard and
+  // Gamepad API state through shared memory, so SDL's input subsystems stay uninitialized.
+#else
   /* Make sure we initialize everything input related now, this will automatically add all of the connected controllers
    * as expected */
   AURORA_ASSERT(SDL_Init(SDL_INIT_HAPTIC | SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD | SDL_INIT_SENSOR),
                 "Failed to initialize SDL subsystems: {}", SDL_GetError());
+#endif
 }
 
 struct MouseScrollStatus {

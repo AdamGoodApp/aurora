@@ -1,6 +1,20 @@
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/AuroraTargetPlatform.cmake")
 
+# ── Emscripten: plain GCM/ISO reader implementing the nod C API (no Rust) ──
+if (EMSCRIPTEN)
+  if (NOT TARGET nod::nod)
+    set(_aurora_nod_gcm_dir "${CMAKE_CURRENT_LIST_DIR}/../lib/dolphin/dvd")
+    add_library(nod_gcm STATIC "${_aurora_nod_gcm_dir}/nod_gcm.cpp")
+    target_include_directories(nod_gcm PUBLIC "${_aurora_nod_gcm_dir}/nod_gcm")
+    target_compile_features(nod_gcm PRIVATE cxx_std_20)
+    set_target_properties(nod_gcm PROPERTIES FOLDER "aurora")
+    add_library(nod::nod ALIAS nod_gcm)
+    unset(_aurora_nod_gcm_dir)
+  endif ()
+  return()
+endif ()
+
 # Resolve nod dependency based on AURORA_NOD_PROVIDER.
 #
 # After this module runs:

@@ -1,6 +1,19 @@
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/AuroraTargetPlatform.cmake")
 
+# Emscripten: WebGPU comes from the emdawnwebgpu port (Dawn's Emscripten bindings), enabled through
+# `--use-port=.../emdawnwebgpu*.py` in the global compile and link flags. It provides the same
+# webgpu.h / webgpu_cpp.h API, so the Dawn targets become header-only interface aliases.
+if (EMSCRIPTEN)
+  if (NOT TARGET dawn_webgpu_emscripten)
+    add_library(dawn_webgpu_emscripten INTERFACE)
+    add_library(dawn::webgpu_dawn ALIAS dawn_webgpu_emscripten)
+    add_library(dawn::dawncpp_headers ALIAS dawn_webgpu_emscripten)
+  endif ()
+  set(AURORA_DAWN_IS_SHARED FALSE)
+  return()
+endif ()
+
 # Resolve Dawn/WebGPU dependency based on AURORA_DAWN_PROVIDER and AURORA_DAWN_LINKAGE.
 #
 # After this module runs:

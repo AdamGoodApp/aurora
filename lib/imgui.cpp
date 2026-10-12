@@ -92,6 +92,14 @@ void create_context() noexcept {
 
 void initialize() noexcept {
   ZoneScoped;
+#ifdef __EMSCRIPTEN__
+  // Browser build: no SDL window; ImGui renders through WebGPU and receives no platform input.
+  g_useSdlRenderer = false;
+  ImGui_ImplWGPU_InitInfo info;
+  info.Device = webgpu::g_device.Get();
+  info.RenderTargetFormat = static_cast<WGPUTextureFormat>(webgpu::g_graphicsConfig.surfaceConfiguration.format);
+  ImGui_ImplWGPU_Init(&info);
+#else
   SDL_Renderer* renderer = window::get_sdl_renderer();
   ImGui_ImplSDL3_InitForSDLRenderer(window::get_sdl_window(), renderer);
   g_useSdlRenderer = renderer != nullptr;
@@ -103,16 +111,21 @@ void initialize() noexcept {
     info.RenderTargetFormat = static_cast<WGPUTextureFormat>(webgpu::g_graphicsConfig.surfaceConfiguration.format);
     ImGui_ImplWGPU_Init(&info);
   }
+#endif
 }
 
 void shutdown() noexcept {
   ZoneScoped;
+#ifdef __EMSCRIPTEN__
+  ImGui_ImplWGPU_Shutdown();
+#else
   if (g_useSdlRenderer) {
     ImGui_ImplSDLRenderer3_Shutdown();
   } else {
     ImGui_ImplWGPU_Shutdown();
   }
   ImGui_ImplSDL3_Shutdown();
+#endif
   ImGui::DestroyContext();
   for (const auto& texture : g_sdlTextures) {
     SDL_DestroyTexture(texture);
@@ -122,6 +135,9 @@ void shutdown() noexcept {
 }
 
 void process_event(const SDL_Event& event) noexcept {
+#ifdef __EMSCRIPTEN__
+  (void)event;
+#else
   auto renderEvent = event;
   if (g_useSdlRenderer) {
     if (SDL_Renderer* renderer = window::get_sdl_renderer()) {
@@ -129,6 +145,7 @@ void process_event(const SDL_Event& event) noexcept {
     }
   }
   ImGui_ImplSDL3_ProcessEvent(&renderEvent);
+#endif
 }
 
 bool wants_capture_event(const SDL_Event& event) noexcept {
@@ -165,6 +182,7 @@ void new_frame(const AuroraWindowSize& size) noexcept {
   ImVec2 displaySize{static_cast<float>(size.width), static_cast<float>(size.height)};
 
   if (g_useSdlRenderer) {
+#ifndef __EMSCRIPTEN__
     if (SDL_Renderer* renderer = window::get_sdl_renderer()) {
       float renderScaleX = 1.0f;
       float renderScaleY = 1.0f;
@@ -182,6 +200,7 @@ void new_frame(const AuroraWindowSize& size) noexcept {
       }
     }
     ImGui_ImplSDLRenderer3_NewFrame();
+#endif
     g_scale = size.scale;
   } else {
     if (g_scale != size.scale) {
@@ -195,7 +214,12 @@ void new_frame(const AuroraWindowSize& size) noexcept {
     }
     ImGui_ImplWGPU_NewFrame();
   }
+#ifdef __EMSCRIPTEN__
+  // No platform backend: one ImGui frame per 60 Hz VI retrace.
+  ImGui::GetIO().DeltaTime = 1.f / 60.f;
+#else
   ImGui_ImplSDL3_NewFrame();
+#endif
 
   ImGuiIO& io = ImGui::GetIO();
   io.DisplayFramebufferScale = framebufferScale;
@@ -231,10 +255,12 @@ void render(const wgpu::RenderPassEncoder& pass, const DrawData& drawData) noexc
     return;
   }
   if (g_useSdlRenderer) {
+#ifndef __EMSCRIPTEN__
     SDL_Renderer* renderer = window::get_sdl_renderer();
     SDL_RenderClear(renderer);
     ImGui_ImplSDLRenderer3_RenderDrawData(data, renderer);
     SDL_RenderPresent(renderer);
+#endif
   } else {
     pass.PushDebugGroup("Aurora: Dear Imgui");
     ImGui_ImplWGPU_RenderDrawData(data, pass.Get());

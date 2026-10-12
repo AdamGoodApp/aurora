@@ -30,6 +30,23 @@
 #include <dawn/native/DawnNative.h>
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+
+// The page's game worker requests the adapter/device asynchronously before main() and passes them in as
+// Module['auroraGpuDevice'] / Module['auroraCanvas']; the blocking game loop never waits on WebGPU futures.
+EM_JS(WGPUDevice, aurora_emscripten_import_device, (), {
+  const device = Module['auroraGpuDevice'];
+  device.addEventListener('uncapturederror', (ev) => {
+    err('[aurora] WebGPU uncaptured error: ' + ev.error.message);
+  });
+  return WebGPU.importJsDevice(device);
+});
+EM_JS(WGPUSurface, aurora_emscripten_import_surface, (), {
+  return WebGPU.importJsSurface(Module['auroraCanvas'].getContext('webgpu'));
+});
+#endif
+
 namespace aurora::gx {
 void clear_copy_texture_cache() noexcept;
 } // namespace aurora::gx
@@ -69,10 +86,12 @@ bool g_bcTexturesSupported = false;
 bool g_astcTexturesSupported = false;
 bool g_textureComponentSwizzleSupported = false;
 static std::atomic_bool g_initialized = false;
+bool g_useImmediates = true;
 static std::atomic_bool g_vsyncEnabled = true;
 
 namespace {
 
+#ifndef __EMSCRIPTEN__
 AuroraLogLevel wgpu_log_level(wgpu::LoggingType type) {
   switch (type) {
   case wgpu::LoggingType::Verbose:
@@ -91,6 +110,7 @@ AuroraLogLevel wgpu_log_level(wgpu::LoggingType type) {
 void wgpu_log(wgpu::LoggingType type, wgpu::StringView message) {
   Log.report(wgpu_log_level(type), "WebGPU message: {}", message);
 }
+#endif
 
 struct ResampleUniformBlock {
   uint32_t samplerMode = 0;
@@ -733,6 +753,10 @@ static void release_surface_locked() noexcept {
 }
 
 static bool create_surface() {
+#ifdef __EMSCRIPTEN__
+  release_surface_locked();
+  g_surface = wgpu::Surface::Acquire(aurora_emscripten_import_surface());
+#else
   SDL_Window* window = window::get_sdl_window();
   if (window == nullptr) {
     Log.error("Failed to create surface: no window");
@@ -741,6 +765,7 @@ static bool create_surface() {
   window::SurfaceLock surfaceLock;
   release_surface_locked();
   g_surface = create_window_surface(g_instance, window, "Surface");
+#endif
   if (!g_surface) {
     Log.error("Failed to create surface");
     return false;
@@ -748,7 +773,73 @@ static bool create_surface() {
   return true;
 }
 
+#ifdef __EMSCRIPTEN__
+static bool initialize_emscripten_device(AuroraBackend auroraBackend) {
+  if (auroraBackend != BACKEND_WEBGPU) {
+    return false;
+  }
+  if (!g_instance) {
+    g_instance = wgpu::CreateInstance(nullptr);
+    if (!g_instance) {
+      Log.error("Failed to create WebGPU instance");
+      return false;
+    }
+  }
+  if (!create_surface()) {
+    return false;
+  }
+  g_device = wgpu::Device::Acquire(aurora_emscripten_import_device());
+  if (!g_device) {
+    Log.error("Failed to import the page's WebGPU device");
+    return false;
+  }
+  g_device.GetAdapterInfo(&g_adapterInfo);
+  g_backendType = wgpu::BackendType::WebGPU;
+  Log.info("Graphics adapter information\n  API: WebGPU (browser)\n  Vendor: {}\n  Architecture: {}\n  Device: {}",
+           g_adapterInfo.vendor, g_adapterInfo.architecture, g_adapterInfo.device);
+
+  wgpu::Limits limits{};
+  g_device.GetLimits(&limits);
+  g_hasCoreFeatures = false;
+  g_bcTexturesSupported = false;
+  g_astcTexturesSupported = false;
+  g_textureComponentSwizzleSupported = false;
+  wgpu::SupportedFeatures supportedFeatures;
+  g_device.GetFeatures(&supportedFeatures);
+  std::string featureList;
+  for (size_t i = 0; i < supportedFeatures.featureCount; ++i) {
+    const auto feature = supportedFeatures.features[i];
+    if (feature == wgpu::FeatureName::CoreFeaturesAndLimits) {
+      g_hasCoreFeatures = true;
+    } else if (feature == wgpu::FeatureName::TextureCompressionBC) {
+      g_bcTexturesSupported = true;
+    } else if (feature == wgpu::FeatureName::TextureCompressionASTC) {
+      g_astcTexturesSupported = true;
+    } else if (feature == wgpu::FeatureName::TextureComponentSwizzle) {
+      g_textureComponentSwizzleSupported = true;
+    }
+    featureList += "\n  ";
+    featureList += magic_enum::enum_name(feature);
+  }
+  Log.info("Device features: {}", featureList);
+  Log.info("Device limits:\n  maxTextureDimension2D: {}\n  maxStorageBuffersPerShaderStage: {}"
+           "\n  minUniformBufferOffsetAlignment: {}\n  maxImmediateSize: {}",
+           limits.maxTextureDimension2D, limits.maxStorageBuffersPerShaderStage,
+           limits.minUniformBufferOffsetAlignment, limits.maxImmediateSize);
+  g_useImmediates = limits.maxImmediateSize != WGPU_LIMIT_U32_UNDEFINED &&
+                    limits.maxImmediateSize >= sizeof(gx::DrawImmediateData);
+  Log.info("Immediates: {}", g_useImmediates ? "enabled" : "uniform fallback");
+  return true;
+}
+#endif
+
 bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+#ifdef __EMSCRIPTEN__
+  (void)allowCpu;
+  if (!initialize_emscripten_device(auroraBackend)) {
+    return false;
+  }
+#else
   if (!g_instance) {
     Log.info("Creating WebGPU instance");
     const std::array requiredInstanceFeatures{
@@ -1008,6 +1099,7 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     }
     g_device.SetLoggingCallback(wgpu_log);
   }
+#endif
   g_queue = g_device.GetQueue();
 
   const wgpu::Status status = g_surface.GetCapabilities(g_adapter, &g_surfaceCapabilities);

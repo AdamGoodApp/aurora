@@ -49,6 +49,9 @@ enum class BufferMapState {
 
 std::array<wgpu::Buffer, StagingBufferCount> g_stagingBuffers;
 std::array<std::atomic<BufferMapState>, StagingBufferCount> g_mappingStates;
+#ifdef __EMSCRIPTEN__
+std::vector<uint8_t> g_cpuStaging;
+#endif
 uint32_t g_frameIndex = UINT32_MAX;
 
 std::array<FramePacket, FrameSlotCount> g_framePackets;
@@ -219,6 +222,14 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
                                                      std::memory_order_acquire)) {
     return;
   }
+#ifdef __EMSCRIPTEN__
+  // CPU-backed staging is writable immediately (see frame.hpp).
+  g_mappingStates[slot].store(BufferMapState::Mapped, std::memory_order_release);
+  if (releaseSlotOnCompletion) {
+    g_stagingSlots.release(slot);
+  }
+  return;
+#endif
 
   g_stagingBuffers[slot].MapAsync(
       wgpu::MapMode::Write, 0, StagingBufferSize, wgpu::CallbackMode::AllowSpontaneous,
@@ -246,6 +257,9 @@ namespace detail {
 Resources& resources() noexcept { return g_resources; }
 
 const wgpu::Buffer& staging_buffer(size_t slot) { return g_stagingBuffers[slot]; }
+#ifdef __EMSCRIPTEN__
+uint8_t* staging_cpu(size_t slot) { return g_cpuStaging.data() + slot * StagingBufferSize; }
+#endif
 
 std::optional<RegisteredDrawType> find_runtime_draw_type(DrawTypeId id) {
   std::lock_guard lock{g_runtimeTypeMutex};
@@ -384,7 +398,9 @@ void initialize() {
     std::lock_guard lock{g_presentStatsMutex};
     g_presentTimes.clear();
   }
+#ifndef __EMSCRIPTEN__
   render_worker::initialize();
+#endif
   // This appears to take a while and blocks the render thread for periods of time
   // render_worker::set_event_pump([] {
   //   if (g_instance) {
@@ -397,6 +413,14 @@ void initialize() {
 
   // For uniform & storage buffer offset alignments
   g_device.GetLimits(&g_resources.limits);
+#ifdef __EMSCRIPTEN__
+  // The page creates the device with the adapter's limits (Safari reports 32-byte offset alignment); keep the
+  // same floors Dawn native requests in webgpu::initialize so layouts match native.
+  g_resources.limits.minUniformBufferOffsetAlignment =
+      std::max<uint32_t>(g_resources.limits.minUniformBufferOffsetAlignment, 64);
+  g_resources.limits.minStorageBufferOffsetAlignment =
+      std::max<uint32_t>(g_resources.limits.minStorageBufferOffsetAlignment, 16);
+#endif
 
   const auto createBuffer = [](wgpu::Buffer& out, wgpu::BufferUsage usage, uint64_t size, const char* label) {
     if (size <= 0) {
@@ -420,9 +444,17 @@ void initialize() {
                "Shared Storage Buffer");
   for (size_t i = 0; i < g_stagingBuffers.size(); ++i) {
     const auto label = fmt::format("Staging Buffer {}", i);
+#ifdef __EMSCRIPTEN__
+    createBuffer(g_stagingBuffers[i], wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc, StagingBufferSize,
+                 label.c_str());
+#else
     createBuffer(g_stagingBuffers[i], wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc, StagingBufferSize,
                  label.c_str());
+#endif
   }
+#ifdef __EMSCRIPTEN__
+  g_cpuStaging.assign(StagingBufferCount * StagingBufferSize, 0);
+#endif
   for (auto& state : g_mappingStates) {
     state.store(BufferMapState::Unmapped, std::memory_order_release);
   }
@@ -553,6 +585,9 @@ void shutdown() {
   g_resources.indexBuffer = {};
   g_resources.storageBuffer = {};
   g_stagingBuffers.fill({});
+#ifdef __EMSCRIPTEN__
+  g_cpuStaging = {};
+#endif
   for (auto& packet : g_framePackets) {
     packet = {};
   }
@@ -633,7 +668,11 @@ bool begin_frame() {
     if (size <= 0) {
       return;
     }
+#ifdef __EMSCRIPTEN__
+    buf = ByteBuffer{staging_cpu(*stagingSlot) + bufferOffset, static_cast<size_t>(size)};
+#else
     buf = ByteBuffer{static_cast<u8*>(stagingBuf.GetMappedRange(bufferOffset, size)), static_cast<size_t>(size)};
+#endif
     bufferOffset += size;
   };
   mapBuffer(frame.verts, VertexBufferSize);
@@ -673,7 +712,9 @@ void end_frame(EndFrameCallback callback) {
   const size_t stagingSlot = frame.stagingBuffer;
   render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, callback = std::move(callback)]() mutable {
     auto& packet = g_framePackets[frameSlot];
+#ifndef __EMSCRIPTEN__
     g_stagingBuffers[stagingSlot].Unmap();
+#endif
     g_mappingStates[stagingSlot].store(BufferMapState::Unmapped, std::memory_order_release);
     auto encoder = std::move(packet.encoder);
     const auto stats = packet.stats;

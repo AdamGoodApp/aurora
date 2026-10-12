@@ -62,7 +62,10 @@ static std::mutex g_pipelineMutex;
 static bool g_hasPipelineThread = false;
 static size_t g_pipelinesPerFrame = 0;
 // For synchronous pipeline fallback (OpenGL)
-#ifdef NDEBUG
+#if defined(__EMSCRIPTEN__)
+// Browser createRenderPipeline returns immediately (compilation happens in the GPU process).
+constexpr size_t BuildPipelinesPerFrame = 64;
+#elif defined(NDEBUG)
 constexpr size_t BuildPipelinesPerFrame = 5;
 #else
 constexpr size_t BuildPipelinesPerFrame = 1;
@@ -1129,6 +1132,9 @@ void initialize_pipeline_cache() {
     g_pipelineThread = std::thread(pipeline_worker);
   }
 
+#ifdef __EMSCRIPTEN__
+  // Browser build: no persistent pipeline cache DB and no writer thread; pipelines build at frame end.
+#else
   const size_t loadedCount = load_pipeline_cache();
   if (!g_pipelineCacheBroken && loadedCount > 0) {
     g_gpuCachePrunePending = true;
@@ -1137,6 +1143,7 @@ void initialize_pipeline_cache() {
   if (!g_pipelineCacheBroken) {
     start_pipeline_cache_writer();
   }
+#endif
 }
 
 void shutdown_pipeline_cache() {

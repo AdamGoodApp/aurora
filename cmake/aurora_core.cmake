@@ -12,8 +12,13 @@ add_library(aurora_core STATIC
         lib/thread.hpp
         lib/time.cpp
         lib/time_internal.hpp
-        lib/window.cpp
 )
+if (EMSCRIPTEN)
+    # Browser build: the page owns the canvas; no SDL video. See lib/window_web.cpp.
+    target_sources(aurora_core PRIVATE lib/window_web.cpp)
+else ()
+    target_sources(aurora_core PRIVATE lib/window.cpp)
+endif ()
 add_library(aurora::core ALIAS aurora_core)
 set_target_properties(aurora_core PROPERTIES FOLDER "aurora")
 
@@ -63,14 +68,25 @@ if(AURORA_ENABLE_RMLUI)
 endif ()
 
 if (AURORA_ENABLE_GX)
-    target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
-    target_sources(aurora_core PRIVATE
-            lib/webgpu/gpu.cpp
-            lib/webgpu/gpu_cache.cpp
-            lib/webgpu/gpu_prof.cpp
-            lib/dawn/BackendBinding.cpp
-            lib/dawn/TracyPlatform.cpp
-    )
+    if (EMSCRIPTEN)
+        # emdawnwebgpu: no Dawn-native instance/toggles/cache/platform; surfaces come from the JS canvas.
+        target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX)
+        target_compile_definitions(aurora_core PRIVATE ENABLE_BACKEND_WEBGPU)
+        target_sources(aurora_core PRIVATE
+                lib/webgpu/gpu.cpp
+                lib/webgpu/gpu_cache.cpp
+                lib/webgpu/gpu_prof.cpp
+        )
+    else ()
+        target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
+        target_sources(aurora_core PRIVATE
+                lib/webgpu/gpu.cpp
+                lib/webgpu/gpu_cache.cpp
+                lib/webgpu/gpu_prof.cpp
+                lib/dawn/BackendBinding.cpp
+                lib/dawn/TracyPlatform.cpp
+        )
+    endif ()
     if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
         set_source_files_properties(lib/dawn/TracyPlatform.cpp PROPERTIES COMPILE_FLAGS -fno-rtti)
     endif ()
